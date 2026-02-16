@@ -10,3 +10,8 @@ __pycache__/
 dist/
 build/
 .claude/
+
+# Face detection outputs
+face_detection.db
+detected_faces/
+photos/

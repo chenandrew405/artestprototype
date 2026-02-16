@@ -43,9 +43,45 @@ Then open `http://localhost:8000` in your browser.
 - Shows preview of captured photos
 - No installation required (uses browser APIs)
 
-### Option 2: Python Desktop App (main.py)
+### Option 2: Python Face Detection with Database (face_detection.py)
 
-Desktop application using OpenCV for direct camera access.
+Real-time face detection using OpenCV with SQLite database integration.
+
+**Run:**
+```bash
+source venv/bin/activate
+python face_detection.py
+```
+
+**Controls:**
+- **q** or **ESC** - Quit the application
+- **s** or **SPACE** - Manually save current detection to database with image
+
+**Features:**
+- Real-time face detection with green bounding boxes
+- Automatic detection logging to SQLite database
+- Saves face coordinates, timestamps, and metadata
+- FPS counter and face count overlay
+- Manual image capture of detections
+- Database viewer to see all detections
+- Total face count tracker
+
+**View Database:**
+```bash
+python view_database.py
+```
+
+**Configuration:**
+Edit `config.py` to customize:
+- Camera settings (resolution, index)
+- Detection sensitivity
+- Auto-save behavior
+- Output directories
+- Database location
+
+### Option 3: Python Desktop App (main.py)
+
+Simple desktop application using OpenCV for direct camera access.
 
 **Run:**
 ```bash
@@ -65,8 +101,13 @@ python main.py
 
 ## Files
 
-- `index.html` - Web-based camera capture
-- `main.py` - Python OpenCV camera capture
+- `index.html` - Web-based camera capture with TensorFlow.js face detection
+- `face_detection.py` - Python face detection with database integration
+- `config.py` - Configuration settings for face detection
+- `view_database.py` - Database viewer utility
+- `main.py` - Simple Python OpenCV camera capture
 - `requirements.txt` - Python dependencies
 - `venv/` - Python virtual environment
-- `photos/` - Directory where Python script saves photos (created automatically)
+- `photos/` - Directory where main.py saves photos (created automatically)
+- `detected_faces/` - Directory where face_detection.py saves images (created automatically)
+- `face_detection.db` - SQLite database (created automatically)
