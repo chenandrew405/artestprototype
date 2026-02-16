@@ -118,6 +118,7 @@
         <div class="controls">
             <button id="startBtn">Start Camera</button>
             <button id="captureBtn" disabled>Take Photo</button>
+            <button id="switchBtn" disabled>Switch Camera</button>
             <button id="stopBtn" disabled>Stop Camera</button>
         </div>
 
@@ -129,12 +130,14 @@
         const canvas = document.getElementById('canvas');
         const startBtn = document.getElementById('startBtn');
         const captureBtn = document.getElementById('captureBtn');
+        const switchBtn = document.getElementById('switchBtn');
         const stopBtn = document.getElementById('stopBtn');
         const statusDiv = document.getElementById('status');
         const previewDiv = document.getElementById('preview');
 
         let stream = null;
         let photoCount = 0;
+        let currentFacingMode = 'user'; // 'user' for front camera, 'environment' for back camera
 
         function showStatus(message, type = 'info') {
             statusDiv.textContent = message;
@@ -150,7 +153,7 @@
                     video: {
                         width: { ideal: 1280 },
                         height: { ideal: 720 },
-                        facingMode: 'user' // Use 'environment' for back camera
+                        facingMode: currentFacingMode
                     },
                     audio: false
                 });
@@ -160,13 +163,28 @@
                 // Enable/disable buttons
                 startBtn.disabled = true;
                 captureBtn.disabled = false;
+                switchBtn.disabled = false;
                 stopBtn.disabled = false;
 
-                showStatus('Camera started successfully!', 'success');
+                const cameraType = currentFacingMode === 'user' ? 'Front' : 'Back';
+                showStatus(`${cameraType} camera started successfully!`, 'success');
             } catch (error) {
                 console.error('Error accessing camera:', error);
                 showStatus(`Error: ${error.message}`, 'error');
             }
+        }
+
+        async function switchCamera() {
+            // Toggle facing mode
+            currentFacingMode = currentFacingMode === 'user' ? 'environment' : 'user';
+
+            // Stop current stream
+            if (stream) {
+                stream.getTracks().forEach(track => track.stop());
+            }
+
+            // Start camera with new facing mode
+            await startCamera();
         }
 
         function capturePhoto() {
@@ -219,6 +237,7 @@
                 // Enable/disable buttons
                 startBtn.disabled = false;
                 captureBtn.disabled = true;
+                switchBtn.disabled = true;
                 stopBtn.disabled = true;
 
                 showStatus('Camera stopped', 'info');
@@ -228,6 +247,7 @@
         // Event listeners
         startBtn.addEventListener('click', startCamera);
         captureBtn.addEventListener('click', capturePhoto);
+        switchBtn.addEventListener('click', switchCamera);
         stopBtn.addEventListener('click', stopCamera);
 
         // Cleanup on page unload
