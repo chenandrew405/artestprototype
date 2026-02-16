@@ -25,13 +25,27 @@
             color: #333;
         }
 
-        #video {
+        .video-container {
+            position: relative;
             width: 100%;
             max-width: 640px;
+            margin: 20px auto;
+        }
+
+        #video {
+            width: 100%;
             border: 2px solid #ddd;
             border-radius: 5px;
             display: block;
-            margin: 20px auto;
+        }
+
+        #faceCanvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
         }
 
         #canvas {
@@ -107,12 +121,21 @@
     </style>
 </head>
 <body>
+    <!-- TensorFlow.js and Face Detection -->
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-core"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-converter"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-backend-webgl"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/face-detection"></script>
+
     <div class="container">
-        <h1>Camera Photo Capture</h1>
+        <h1>Camera Photo Capture with Face Detection</h1>
 
         <div id="status"></div>
 
-        <video id="video" autoplay playsinline></video>
+        <div class="video-container">
+            <video id="video" autoplay playsinline></video>
+            <canvas id="faceCanvas"></canvas>
+        </div>
         <canvas id="canvas"></canvas>
 
         <div class="controls">
@@ -128,6 +151,7 @@
     <script>
         const video = document.getElementById('video');
         const canvas = document.getElementById('canvas');
+        const faceCanvas = document.getElementById('faceCanvas');
         const startBtn = document.getElementById('startBtn');
         const captureBtn = document.getElementById('captureBtn');
         const switchBtn = document.getElementById('switchBtn');
@@ -138,10 +162,95 @@
         let stream = null;
         let photoCount = 0;
         let currentFacingMode = 'user'; // 'user' for front camera, 'environment' for back camera
+        let faceDetector = null;
+        let detectionRunning = false;
 
         function showStatus(message, type = 'info') {
             statusDiv.textContent = message;
             statusDiv.className = type;
+        }
+
+        // Initialize face detector
+        async function initFaceDetector() {
+            if (!faceDetector) {
+                try {
+                    showStatus('Loading face detection model...', 'info');
+                    const model = faceDetection.SupportedModels.MediaPipeFaceDetector;
+                    const detectorConfig = {
+                        runtime: 'tfjs',
+                        maxFaces: 10,
+                        minDetectionConfidence: 0.5
+                    };
+                    faceDetector = await faceDetection.createDetector(model, detectorConfig);
+                    console.log('Face detector initialized');
+                } catch (error) {
+                    console.error('Error initializing face detector:', error);
+                }
+            }
+        }
+
+        // Detect and draw faces
+        async function detectFaces() {
+            if (!detectionRunning || !faceDetector) return;
+
+            try {
+                const faces = await faceDetector.estimateFaces(video);
+
+                // Set canvas size to match video display size
+                const rect = video.getBoundingClientRect();
+                faceCanvas.width = rect.width;
+                faceCanvas.height = rect.height;
+
+                const ctx = faceCanvas.getContext('2d');
+                ctx.clearRect(0, 0, faceCanvas.width, faceCanvas.height);
+
+                // Calculate scale factors
+                const scaleX = rect.width / video.videoWidth;
+                const scaleY = rect.height / video.videoHeight;
+
+                // Draw green boxes around detected faces
+                faces.forEach(face => {
+                    const box = face.box;
+
+                    // Scale coordinates to match canvas size
+                    const x = box.xMin * scaleX;
+                    const y = box.yMin * scaleY;
+                    const width = box.width * scaleX;
+                    const height = box.height * scaleY;
+
+                    // Draw green box
+                    ctx.strokeStyle = '#00FF00';
+                    ctx.lineWidth = 3;
+                    ctx.strokeRect(x, y, width, height);
+
+                    // Draw confidence score
+                    ctx.fillStyle = '#00FF00';
+                    ctx.font = '16px Arial';
+                    const confidence = (face.score * 100).toFixed(0);
+                    ctx.fillText(`${confidence}%`, x, y - 5);
+                });
+            } catch (error) {
+                console.error('Error detecting faces:', error);
+            }
+
+            // Continue detection loop
+            if (detectionRunning) {
+                requestAnimationFrame(detectFaces);
+            }
+        }
+
+        // Start face detection
+        async function startFaceDetection() {
+            await initFaceDetector();
+            detectionRunning = true;
+            detectFaces();
+        }
+
+        // Stop face detection
+        function stopFaceDetection() {
+            detectionRunning = false;
+            const ctx = faceCanvas.getContext('2d');
+            ctx.clearRect(0, 0, faceCanvas.width, faceCanvas.height);
         }
 
         async function startCamera() {
@@ -160,6 +269,11 @@
 
                 video.srcObject = stream;
 
+                // Wait for video to be ready
+                await new Promise((resolve) => {
+                    video.onloadedmetadata = resolve;
+                });
+
                 // Enable/disable buttons
                 startBtn.disabled = true;
                 captureBtn.disabled = false;
@@ -168,6 +282,9 @@
 
                 const cameraType = currentFacingMode === 'user' ? 'Front' : 'Back';
                 showStatus(`${cameraType} camera started successfully!`, 'success');
+
+                // Start face detection
+                startFaceDetection();
             } catch (error) {
                 console.error('Error accessing camera:', error);
                 showStatus(`Error: ${error.message}`, 'error');
@@ -230,6 +347,9 @@
 
         function stopCamera() {
             if (stream) {
+                // Stop face detection
+                stopFaceDetection();
+
                 stream.getTracks().forEach(track => track.stop());
                 video.srcObject = null;
                 stream = null;
@@ -258,7 +378,7 @@
         });
 
         // Show initial status
-        showStatus('Click "Start Camera" to begin', 'info');
+        showStatus('Click "Start Camera" to begin with face detection', 'info');
     </script>
 </body>
 </html>
