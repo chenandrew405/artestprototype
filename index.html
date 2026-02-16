@@ -122,10 +122,10 @@
 </head>
 <body>
     <!-- TensorFlow.js and Face Detection -->
-    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-core"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-converter"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-backend-webgl"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/face-detection"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-core@4.11.0"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-converter@4.11.0"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-backend-webgl@4.11.0"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/face-detection@1.0.2"></script>
 
     <div class="container">
         <h1>Camera Photo Capture with Face Detection</h1>
@@ -174,7 +174,7 @@
         async function initFaceDetector() {
             if (!faceDetector) {
                 try {
-                    showStatus('Loading face detection model...', 'info');
+                    showStatus('Loading face detection model (this may take a moment)...', 'info');
                     const model = faceDetection.SupportedModels.MediaPipeFaceDetector;
                     const detectorConfig = {
                         runtime: 'tfjs',
@@ -183,8 +183,10 @@
                     };
                     faceDetector = await faceDetection.createDetector(model, detectorConfig);
                     console.log('Face detector initialized');
+                    showStatus('Face detection model loaded successfully!', 'success');
                 } catch (error) {
                     console.error('Error initializing face detector:', error);
+                    showStatus(`Face detection failed to load: ${error.message}. Camera will work without face detection.`, 'error');
                 }
             }
         }
@@ -242,8 +244,12 @@
         // Start face detection
         async function startFaceDetection() {
             await initFaceDetector();
-            detectionRunning = true;
-            detectFaces();
+            if (faceDetector) {
+                detectionRunning = true;
+                detectFaces();
+            } else {
+                console.log('Face detection not available, continuing without it');
+            }
         }
 
         // Stop face detection
@@ -377,8 +383,14 @@
             }
         });
 
-        // Show initial status
-        showStatus('Click "Start Camera" to begin with face detection', 'info');
+        // Check if TensorFlow libraries loaded
+        if (typeof faceDetection === 'undefined') {
+            showStatus('Warning: Face detection libraries failed to load from CDN. Camera will work but face detection will not be available. Check your internet connection.', 'error');
+            console.error('faceDetection library not found');
+        } else {
+            // Show initial status
+            showStatus('Click "Start Camera" to begin with face detection', 'info');
+        }
     </script>
 </body>
 </html>
