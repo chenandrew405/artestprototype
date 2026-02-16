@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Camera Prototype</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+
+        .container {
+            background: white;
+            padding: 20px;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+
+        h1 {
+            text-align: center;
+            color: #333;
+        }
+
+        #video {
+            width: 100%;
+            max-width: 640px;
+            border: 2px solid #ddd;
+            border-radius: 5px;
+            display: block;
+            margin: 20px auto;
+        }
+
+        #canvas {
+            display: none;
+        }
+
+        .controls {
+            text-align: center;
+            margin: 20px 0;
+        }
+
+        button {
+            background-color: #4CAF50;
+            color: white;
+            padding: 12px 24px;
+            border: none;
+            border-radius: 5px;
+            font-size: 16px;
+            cursor: pointer;
+            margin: 5px;
+        }
+
+        button:hover {
+            background-color: #45a049;
+        }
+
+        button:disabled {
+            background-color: #cccccc;
+            cursor: not-allowed;
+        }
+
+        #captureBtn {
+            background-color: #2196F3;
+        }
+
+        #captureBtn:hover {
+            background-color: #0b7dda;
+        }
+
+        #status {
+            text-align: center;
+            margin: 10px 0;
+            padding: 10px;
+            border-radius: 5px;
+        }
+
+        .success {
+            background-color: #d4edda;
+            color: #155724;
+        }
+
+        .error {
+            background-color: #f8d7da;
+            color: #721c24;
+        }
+
+        .info {
+            background-color: #d1ecf1;
+            color: #0c5460;
+        }
+
+        #preview {
+            margin-top: 20px;
+            text-align: center;
+        }
+
+        #preview img {
+            max-width: 100%;
+            border: 2px solid #ddd;
+            border-radius: 5px;
+            margin-top: 10px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Camera Photo Capture</h1>
+
+        <div id="status"></div>
+
+        <video id="video" autoplay playsinline></video>
+        <canvas id="canvas"></canvas>
+
+        <div class="controls">
+            <button id="startBtn">Start Camera</button>
+            <button id="captureBtn" disabled>Take Photo</button>
+            <button id="stopBtn" disabled>Stop Camera</button>
+        </div>
+
+        <div id="preview"></div>
+    </div>
+
+    <script>
+        const video = document.getElementById('video');
+        const canvas = document.getElementById('canvas');
+        const startBtn = document.getElementById('startBtn');
+        const captureBtn = document.getElementById('captureBtn');
+        const stopBtn = document.getElementById('stopBtn');
+        const statusDiv = document.getElementById('status');
+        const previewDiv = document.getElementById('preview');
+
+        let stream = null;
+        let photoCount = 0;
+
+        function showStatus(message, type = 'info') {
+            statusDiv.textContent = message;
+            statusDiv.className = type;
+        }
+
+        async function startCamera() {
+            try {
+                showStatus('Requesting camera access...', 'info');
+
+                // Request camera access with specific constraints
+                stream = await navigator.mediaDevices.getUserMedia({
+                    video: {
+                        width: { ideal: 1280 },
+                        height: { ideal: 720 },
+                        facingMode: 'user' // Use 'environment' for back camera
+                    },
+                    audio: false
+                });
+
+                video.srcObject = stream;
+
+                // Enable/disable buttons
+                startBtn.disabled = true;
+                captureBtn.disabled = false;
+                stopBtn.disabled = false;
+
+                showStatus('Camera started successfully!', 'success');
+            } catch (error) {
+                console.error('Error accessing camera:', error);
+                showStatus(`Error: ${error.message}`, 'error');
+            }
+        }
+
+        function capturePhoto() {
+            // Set canvas dimensions to match video
+            canvas.width = video.videoWidth;
+            canvas.height = video.videoHeight;
+
+            // Draw current video frame to canvas
+            const context = canvas.getContext('2d');
+            context.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+            // Convert canvas to blob and download
+            canvas.toBlob((blob) => {
+                photoCount++;
+                const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+                const filename = `photo_${timestamp}.png`;
+
+                // Create download link
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = filename;
+                a.click();
+
+                // Show preview
+                const img = document.createElement('img');
+                img.src = url;
+                img.alt = 'Captured photo';
+
+                const caption = document.createElement('p');
+                caption.textContent = `Photo ${photoCount}: ${filename}`;
+
+                previewDiv.innerHTML = '';
+                previewDiv.appendChild(caption);
+                previewDiv.appendChild(img);
+
+                showStatus(`Photo captured and saved as ${filename}`, 'success');
+
+                // Clean up URL after a delay
+                setTimeout(() => URL.revokeObjectURL(url), 60000);
+            }, 'image/png');
+        }
+
+        function stopCamera() {
+            if (stream) {
+                stream.getTracks().forEach(track => track.stop());
+                video.srcObject = null;
+                stream = null;
+
+                // Enable/disable buttons
+                startBtn.disabled = false;
+                captureBtn.disabled = true;
+                stopBtn.disabled = true;
+
+                showStatus('Camera stopped', 'info');
+            }
+        }
+
+        // Event listeners
+        startBtn.addEventListener('click', startCamera);
+        captureBtn.addEventListener('click', capturePhoto);
+        stopBtn.addEventListener('click', stopCamera);
+
+        // Cleanup on page unload
+        window.addEventListener('beforeunload', () => {
+            if (stream) {
+                stream.getTracks().forEach(track => track.stop());
+            }
+        });
+
+        // Show initial status
+        showStatus('Click "Start Camera" to begin', 'info');
+    </script>
+</body>
+</html>
