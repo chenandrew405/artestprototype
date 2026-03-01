@@ -33,6 +33,8 @@
         }
 
         #video {
+            position: relative;
+            z-index: 1;
             width: 100%;
             border: 2px solid #ddd;
             border-radius: 5px;
@@ -46,6 +48,7 @@
             width: 100%;
             height: 100%;
             pointer-events: none;
+            z-index: 2;
         }
 
         #canvas {
@@ -164,6 +167,7 @@
         let currentFacingMode = 'user'; // 'user' for front camera, 'environment' for back camera
         let faceDetector = null;
         let detectionRunning = false;
+        let detectionFrameId = null;
 
         function showStatus(message, type = 'info') {
             statusDiv.textContent = message;
@@ -175,6 +179,13 @@
             if (!faceDetector) {
                 try {
                     showStatus('Loading face detection model (this may take a moment)...', 'info');
+                    await tf.ready();
+                    try {
+                        await tf.setBackend('webgl');
+                        await tf.ready();
+                    } catch (backendError) {
+                        console.warn('WebGL backend unavailable, using default backend:', backendError);
+                    }
                     const model = faceDetection.SupportedModels.MediaPipeFaceDetector;
                     const detectorConfig = {
                         runtime: 'tfjs',
@@ -191,34 +202,168 @@
             }
         }
 
+        function getNumericValue(value) {
+            const num = Number(value);
+            return Number.isFinite(num) ? num : null;
+        }
+
+        function getFaceConfidence(face) {
+            if (!face) return null;
+            const score = Array.isArray(face.score) ? face.score[0] : face.score;
+            const numericScore = getNumericValue(score);
+            if (numericScore === null) return null;
+            return Math.min(1, Math.max(0, numericScore));
+        }
+
+        function normalizeBox(box) {
+            if (!box) return null;
+            let { x, y, width, height } = box;
+            if (width < 0) {
+                x += width;
+                width = Math.abs(width);
+            }
+            if (height < 0) {
+                y += height;
+                height = Math.abs(height);
+            }
+            if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(width) || !Number.isFinite(height)) {
+                return null;
+            }
+            return { x, y, width, height };
+        }
+
+        function extractFaceBox(face) {
+            if (!face) return null;
+
+            if (face.box) {
+                const box = face.box;
+                const xMin = getNumericValue(box.xMin);
+                const yMin = getNumericValue(box.yMin);
+                const width = getNumericValue(box.width);
+                const height = getNumericValue(box.height);
+                const xMax = getNumericValue(box.xMax);
+                const yMax = getNumericValue(box.yMax);
+                const xCenter = getNumericValue(box.xCenter);
+                const yCenter = getNumericValue(box.yCenter);
+
+                if (xMin !== null && yMin !== null) {
+                    if (width !== null && height !== null) {
+                        return normalizeBox({ x: xMin, y: yMin, width, height });
+                    }
+                    if (xMax !== null && yMax !== null) {
+                        return normalizeBox({ x: xMin, y: yMin, width: xMax - xMin, height: yMax - yMin });
+                    }
+                }
+
+                if (xCenter !== null && yCenter !== null && width !== null && height !== null) {
+                    return normalizeBox({
+                        x: xCenter - (width / 2),
+                        y: yCenter - (height / 2),
+                        width,
+                        height
+                    });
+                }
+            }
+
+            if (face.boundingBox) {
+                const boundingBox = face.boundingBox;
+                if (Array.isArray(boundingBox.topLeft) && Array.isArray(boundingBox.bottomRight)) {
+                    const x1 = getNumericValue(boundingBox.topLeft[0]);
+                    const y1 = getNumericValue(boundingBox.topLeft[1]);
+                    const x2 = getNumericValue(boundingBox.bottomRight[0]);
+                    const y2 = getNumericValue(boundingBox.bottomRight[1]);
+                    if (x1 !== null && y1 !== null && x2 !== null && y2 !== null) {
+                        return normalizeBox({ x: x1, y: y1, width: x2 - x1, height: y2 - y1 });
+                    }
+                }
+
+                const x = getNumericValue(boundingBox.x ?? boundingBox.originX);
+                const y = getNumericValue(boundingBox.y ?? boundingBox.originY);
+                const width = getNumericValue(boundingBox.width);
+                const height = getNumericValue(boundingBox.height);
+                if (x !== null && y !== null && width !== null && height !== null) {
+                    return normalizeBox({ x, y, width, height });
+                }
+            }
+
+            if (Array.isArray(face.topLeft) && Array.isArray(face.bottomRight)) {
+                const x1 = getNumericValue(face.topLeft[0]);
+                const y1 = getNumericValue(face.topLeft[1]);
+                const x2 = getNumericValue(face.bottomRight[0]);
+                const y2 = getNumericValue(face.bottomRight[1]);
+                if (x1 !== null && y1 !== null && x2 !== null && y2 !== null) {
+                    return normalizeBox({ x: x1, y: y1, width: x2 - x1, height: y2 - y1 });
+                }
+            }
+
+            return null;
+        }
+
+        function maybeDenormalizeBox(box, videoWidth, videoHeight) {
+            if (!box || videoWidth <= 0 || videoHeight <= 0) return box;
+            const looksNormalized =
+                Math.abs(box.x) <= 1.5 &&
+                Math.abs(box.y) <= 1.5 &&
+                box.width <= 1.5 &&
+                box.height <= 1.5;
+
+            if (!looksNormalized) return box;
+
+            return {
+                x: box.x * videoWidth,
+                y: box.y * videoHeight,
+                width: box.width * videoWidth,
+                height: box.height * videoHeight
+            };
+        }
+
         // Detect and draw faces
         async function detectFaces() {
             if (!detectionRunning || !faceDetector) return;
 
             try {
+                if (video.readyState < 2 || !video.videoWidth || !video.videoHeight) {
+                    if (detectionRunning) {
+                        detectionFrameId = requestAnimationFrame(detectFaces);
+                    }
+                    return;
+                }
+
                 const faces = await faceDetector.estimateFaces(video);
 
                 // Set canvas size to match video display size
                 const rect = video.getBoundingClientRect();
-                faceCanvas.width = rect.width;
-                faceCanvas.height = rect.height;
+                const displayWidth = Math.max(1, Math.round(rect.width));
+                const displayHeight = Math.max(1, Math.round(rect.height));
+
+                if (faceCanvas.width !== displayWidth || faceCanvas.height !== displayHeight) {
+                    faceCanvas.width = displayWidth;
+                    faceCanvas.height = displayHeight;
+                }
 
                 const ctx = faceCanvas.getContext('2d');
                 ctx.clearRect(0, 0, faceCanvas.width, faceCanvas.height);
 
                 // Calculate scale factors
-                const scaleX = rect.width / video.videoWidth;
-                const scaleY = rect.height / video.videoHeight;
+                const scaleX = displayWidth / video.videoWidth;
+                const scaleY = displayHeight / video.videoHeight;
+                const safeFaces = Array.isArray(faces) ? faces : [];
 
                 // Draw green boxes around detected faces
-                faces.forEach(face => {
-                    const box = face.box;
+                safeFaces.forEach(face => {
+                    const rawBox = extractFaceBox(face);
+                    if (!rawBox) return;
+                    const box = maybeDenormalizeBox(rawBox, video.videoWidth, video.videoHeight);
+                    if (!box) return;
 
                     // Scale coordinates to match canvas size
-                    const x = box.xMin * scaleX;
-                    const y = box.yMin * scaleY;
+                    const x = box.x * scaleX;
+                    const y = box.y * scaleY;
                     const width = box.width * scaleX;
                     const height = box.height * scaleY;
+                    if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(width) || !Number.isFinite(height)) {
+                        return;
+                    }
 
                     // Draw green box
                     ctx.strokeStyle = '#00FF00';
@@ -226,10 +371,12 @@
                     ctx.strokeRect(x, y, width, height);
 
                     // Draw confidence score
-                    ctx.fillStyle = '#00FF00';
-                    ctx.font = '16px Arial';
-                    const confidence = (face.score * 100).toFixed(0);
-                    ctx.fillText(`${confidence}%`, x, y - 5);
+                    const confidence = getFaceConfidence(face);
+                    if (confidence !== null) {
+                        ctx.fillStyle = '#00FF00';
+                        ctx.font = '16px Arial';
+                        ctx.fillText(`${Math.round(confidence * 100)}%`, x, y - 5);
+                    }
                 });
             } catch (error) {
                 console.error('Error detecting faces:', error);
@@ -237,12 +384,13 @@
 
             // Continue detection loop
             if (detectionRunning) {
-                requestAnimationFrame(detectFaces);
+                detectionFrameId = requestAnimationFrame(detectFaces);
             }
         }
 
         // Start face detection
         async function startFaceDetection() {
+            stopFaceDetection();
             await initFaceDetector();
             if (faceDetector) {
                 detectionRunning = true;
@@ -255,6 +403,10 @@
         // Stop face detection
         function stopFaceDetection() {
             detectionRunning = false;
+            if (detectionFrameId !== null) {
+                cancelAnimationFrame(detectionFrameId);
+                detectionFrameId = null;
+            }
             const ctx = faceCanvas.getContext('2d');
             ctx.clearRect(0, 0, faceCanvas.width, faceCanvas.height);
         }
@@ -262,6 +414,12 @@
         async function startCamera() {
             try {
                 showStatus('Requesting camera access...', 'info');
+
+                if (stream) {
+                    stopFaceDetection();
+                    stream.getTracks().forEach(track => track.stop());
+                    stream = null;
+                }
 
                 // Request camera access with specific constraints
                 stream = await navigator.mediaDevices.getUserMedia({
@@ -279,6 +437,7 @@
                 await new Promise((resolve) => {
                     video.onloadedmetadata = resolve;
                 });
+                await video.play();
 
                 // Enable/disable buttons
                 startBtn.disabled = true;
@@ -302,8 +461,10 @@
             currentFacingMode = currentFacingMode === 'user' ? 'environment' : 'user';
 
             // Stop current stream
+            stopFaceDetection();
             if (stream) {
                 stream.getTracks().forEach(track => track.stop());
+                stream = null;
             }
 
             // Start camera with new facing mode
