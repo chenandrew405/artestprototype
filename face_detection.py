@@ -12,7 +12,7 @@ from datetime import datetime
 import time
 import config
 
-
+    
 class FaceDetectionDB:
     """Handle database operations for face detection"""
 

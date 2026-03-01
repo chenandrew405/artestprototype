@@ -4,6 +4,7 @@ Python-based camera capture script using OpenCV
 Alternative to the web-based approach
 """
 
+
 import cv2
 import os
 from datetime import datetime
