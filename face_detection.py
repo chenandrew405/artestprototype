@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Face Detection with Database Integration
-Uses OpenCV's Haar Cascade for real-time face detection
+Uses OpenCV DNN face detector (Res10 SSD) for real-time face detection
 Stores detection events and face data in SQLite database
 """
 
@@ -10,9 +10,11 @@ import sqlite3
 import os
 from datetime import datetime
 import time
+import urllib.request
+import numpy as np
 import config
 
-    
+
 class FaceDetectionDB:
     """Handle database operations for face detection"""
 
@@ -81,22 +83,48 @@ class FaceDetector:
     def __init__(self):
         self.db = FaceDetectionDB(config.DATABASE_PATH)
         self.camera = None
-        self.face_cascade = None
+        self.face_net = None
         self.frame_count = 0
         self.fps_start_time = time.time()
         self.fps = 0
 
-        self.load_face_cascade()
+        self.load_face_detector()
 
-    def load_face_cascade(self):
-        """Load OpenCV Haar Cascade for face detection"""
-        cascade_path = cv2.data.haarcascades + 'haarcascade_frontalface_default.xml'
-        self.face_cascade = cv2.CascadeClassifier(cascade_path)
+    def download_model_file(self, url, output_path, label):
+        """Download a DNN model file if not present locally"""
+        print(f"Downloading {label}...")
+        urllib.request.urlretrieve(url, output_path)
+        file_size_kb = os.path.getsize(output_path) / 1024
+        print(f"Downloaded {label}: {output_path} ({file_size_kb:.1f} KB)")
 
-        if self.face_cascade.empty():
-            raise Exception("Failed to load Haar Cascade classifier")
+    def ensure_dnn_models(self):
+        """Ensure required DNN model files are available"""
+        required_files = [
+            (config.DNN_PROTOTXT_PATH, config.DNN_PROTOTXT_URL, "DNN prototxt"),
+            (config.DNN_MODEL_PATH, config.DNN_MODEL_URL, "DNN model"),
+        ]
 
-        print("Face detection model loaded successfully")
+        missing_files = [item for item in required_files if not os.path.exists(item[0])]
+
+        if missing_files and not config.AUTO_DOWNLOAD_DNN_MODELS:
+            missing_paths = ", ".join(path for (path, _, _) in missing_files)
+            raise FileNotFoundError(
+                f"Missing DNN model file(s): {missing_paths}. "
+                "Enable AUTO_DOWNLOAD_DNN_MODELS or place files manually in models/."
+            )
+
+        for output_path, url, label in missing_files:
+            self.download_model_file(url, output_path, label)
+
+    def load_face_detector(self):
+        """Load OpenCV DNN face detector"""
+        self.ensure_dnn_models()
+        self.face_net = cv2.dnn.readNetFromCaffe(config.DNN_PROTOTXT_PATH, config.DNN_MODEL_PATH)
+
+        if self.face_net.empty():
+            raise Exception("Failed to load OpenCV DNN face detector")
+
+        print("DNN face detection model loaded successfully")
 
     def init_camera(self):
         """Initialize camera"""
@@ -113,22 +141,50 @@ class FaceDetector:
 
     def detect_faces(self, frame):
         """Detect faces in frame"""
-        # Convert to grayscale for detection
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        height, width = frame.shape[:2]
+        if height == 0 or width == 0:
+            return []
 
-        # Detect faces
-        faces = self.face_cascade.detectMultiScale(
-            gray,
-            scaleFactor=config.SCALE_FACTOR,
-            minNeighbors=config.MIN_NEIGHBORS,
-            minSize=config.MIN_SIZE
+        blob = cv2.dnn.blobFromImage(
+            frame,
+            scalefactor=1.0,
+            size=config.DNN_INPUT_SIZE,
+            mean=config.DNN_MEAN_VALUES,
+            swapRB=False,
+            crop=False
         )
+        self.face_net.setInput(blob)
+        detections = self.face_net.forward()
+
+        faces = []
+        for i in range(detections.shape[2]):
+            confidence = float(detections[0, 0, i, 2])
+            if confidence < config.DNN_CONFIDENCE_THRESHOLD:
+                continue
+
+            box = detections[0, 0, i, 3:7] * np.array([width, height, width, height], dtype="float32")
+            x1, y1, x2, y2 = box.astype("int")
+
+            x1 = max(0, min(x1, width - 1))
+            y1 = max(0, min(y1, height - 1))
+            x2 = max(0, min(x2, width))
+            y2 = max(0, min(y2, height))
+
+            face_width = x2 - x1
+            face_height = y2 - y1
+            if face_width <= 0 or face_height <= 0:
+                continue
+
+            if face_width < config.DNN_MIN_FACE_SIZE[0] or face_height < config.DNN_MIN_FACE_SIZE[1]:
+                continue
+
+            faces.append((x1, y1, face_width, face_height, confidence))
 
         return faces
 
     def draw_faces(self, frame, faces):
         """Draw bounding boxes around detected faces"""
-        for (x, y, w, h) in faces:
+        for (x, y, w, h, confidence) in faces:
             # Draw rectangle
             cv2.rectangle(
                 frame,
@@ -139,11 +195,11 @@ class FaceDetector:
             )
 
             # Draw label
-            label = "Face"
+            label = f"Face {confidence * 100:.0f}%"
             cv2.putText(
                 frame,
                 label,
-                (x, y - 10),
+                (x, max(20, y - 10)),
                 cv2.FONT_HERSHEY_SIMPLEX,
                 0.5,
                 config.DETECTION_COLOR,
@@ -200,8 +256,8 @@ class FaceDetector:
         detection_id = self.db.save_detection(len(faces), image_path)
 
         # Save individual face coordinates
-        for (x, y, w, h) in faces:
-            self.db.save_face(detection_id, int(x), int(y), int(w), int(h))
+        for (x, y, w, h, confidence) in faces:
+            self.db.save_face(detection_id, int(x), int(y), int(w), int(h), float(confidence))
 
         print(f"Saved detection: {len(faces)} face(s) - ID: {detection_id}")
         if image_path:
@@ -276,7 +332,7 @@ class FaceDetector:
 
 def main():
     """Main entry point"""
-    print("Face Detection with Database Integration")
+    print("Face Detection with OpenCV DNN + Database Integration")
     print("=" * 60)
 
     detector = FaceDetector()

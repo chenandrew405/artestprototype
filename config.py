@@ -14,10 +14,27 @@ CAMERA_WIDTH = 1280
 CAMERA_HEIGHT = 720
 
 # Face Detection Configuration
-# OpenCV Haar Cascade will be loaded in face_detection.py
-SCALE_FACTOR = 1.1  # How much the image size is reduced at each image scale
-MIN_NEIGHBORS = 5  # How many neighbors each candidate rectangle should have
-MIN_SIZE = (30, 30)  # Minimum possible object size
+# OpenCV DNN model (Res10 SSD) configuration
+MODEL_DIR = os.path.join(os.path.dirname(__file__), 'models')
+DNN_PROTOTXT_PATH = os.path.join(MODEL_DIR, 'deploy.prototxt')
+DNN_MODEL_PATH = os.path.join(MODEL_DIR, 'res10_300x300_ssd_iter_140000_fp16.caffemodel')
+
+# Official OpenCV model sources
+DNN_PROTOTXT_URL = 'https://raw.githubusercontent.com/opencv/opencv/master/samples/dnn/face_detector/deploy.prototxt'
+DNN_MODEL_URL = 'https://raw.githubusercontent.com/opencv/opencv_3rdparty/dnn_samples_face_detector_20180205/res10_300x300_ssd_iter_140000_fp16.caffemodel'
+
+# Auto-download model files if missing
+AUTO_DOWNLOAD_DNN_MODELS = True
+
+# DNN inference tuning
+DNN_INPUT_SIZE = (300, 300)
+DNN_MEAN_VALUES = (104.0, 177.0, 123.0)
+DNN_CONFIDENCE_THRESHOLD = 0.6
+DNN_MIN_FACE_SIZE = (40, 40)
+
+# Backward-compatible minimum size key used elsewhere in the app
+MIN_SIZE = DNN_MIN_FACE_SIZE
+
 DETECTION_COLOR = (0, 255, 0)  # Green color for bounding boxes (BGR format)
 BOX_THICKNESS = 2
 
@@ -29,6 +46,9 @@ OUTPUT_DIR = os.path.join(os.path.dirname(__file__), 'detected_faces')
 # Create output directory if it doesn't exist
 if SAVE_IMAGES and not os.path.exists(OUTPUT_DIR):
     os.makedirs(OUTPUT_DIR)
+
+if not os.path.exists(MODEL_DIR):
+    os.makedirs(MODEL_DIR)
 
 # Display Configuration
 WINDOW_NAME = "Face Detection - Press 'q' to quit, 's' to save, 'SPACE' to capture"
