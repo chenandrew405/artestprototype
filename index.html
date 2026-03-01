@@ -128,6 +128,7 @@
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-core@4.11.0"></script>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-converter@4.11.0"></script>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-backend-webgl@4.11.0"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-backend-cpu@4.11.0"></script>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/face-detection@1.0.2"></script>
 
     <div class="container">
@@ -166,6 +167,7 @@
         let photoCount = 0;
         let currentFacingMode = 'user'; // 'user' for front camera, 'environment' for back camera
         let faceDetector = null;
+        let detectorRuntime = '';
         let detectionRunning = false;
         let detectionFrameId = null;
 
@@ -177,24 +179,45 @@
         // Initialize face detector
         async function initFaceDetector() {
             if (!faceDetector) {
+                const model = faceDetection.SupportedModels.MediaPipeFaceDetector;
                 try {
                     showStatus('Loading face detection model (this may take a moment)...', 'info');
-                    await tf.ready();
+                    // Try MediaPipe runtime first (usually more reliable on mobile browsers).
                     try {
-                        await tf.setBackend('webgl');
-                        await tf.ready();
-                    } catch (backendError) {
-                        console.warn('WebGL backend unavailable, using default backend:', backendError);
+                        faceDetector = await faceDetection.createDetector(model, {
+                            runtime: 'mediapipe',
+                            solutionPath: 'https://cdn.jsdelivr.net/npm/@mediapipe/face_detection',
+                            modelType: 'short',
+                            maxFaces: 5,
+                            minDetectionConfidence: 0.35
+                        });
+                        detectorRuntime = 'mediapipe';
+                    } catch (mediapipeError) {
+                        console.warn('MediaPipe runtime init failed:', mediapipeError);
                     }
-                    const model = faceDetection.SupportedModels.MediaPipeFaceDetector;
-                    const detectorConfig = {
-                        runtime: 'tfjs',
-                        maxFaces: 10,
-                        minDetectionConfidence: 0.5
-                    };
-                    faceDetector = await faceDetection.createDetector(model, detectorConfig);
-                    console.log('Face detector initialized');
-                    showStatus('Face detection model loaded successfully!', 'success');
+
+                    // Fallback to TFJS runtime.
+                    if (!faceDetector) {
+                        await tf.ready();
+                        try {
+                            await tf.setBackend('webgl');
+                        } catch (webglError) {
+                            console.warn('WebGL backend unavailable, trying CPU backend:', webglError);
+                            await tf.setBackend('cpu');
+                        }
+                        await tf.ready();
+
+                        faceDetector = await faceDetection.createDetector(model, {
+                            runtime: 'tfjs',
+                            modelType: 'short',
+                            maxFaces: 5,
+                            minDetectionConfidence: 0.35
+                        });
+                        detectorRuntime = `tfjs:${tf.getBackend()}`;
+                    }
+
+                    console.log('Face detector initialized with runtime:', detectorRuntime);
+                    showStatus(`Face detection model loaded (${detectorRuntime})`, 'success');
                 } catch (error) {
                     console.error('Error initializing face detector:', error);
                     showStatus(`Face detection failed to load: ${error.message}. Camera will work without face detection.`, 'error');
@@ -205,6 +228,28 @@
         function getNumericValue(value) {
             const num = Number(value);
             return Number.isFinite(num) ? num : null;
+        }
+
+        function getPoint(point) {
+            if (!point) return null;
+
+            if ((Array.isArray(point) || ArrayBuffer.isView(point)) && point.length >= 2) {
+                const x = getNumericValue(point[0]);
+                const y = getNumericValue(point[1]);
+                if (x !== null && y !== null) {
+                    return { x, y };
+                }
+            }
+
+            if (typeof point === 'object') {
+                const x = getNumericValue(point.x ?? point.X);
+                const y = getNumericValue(point.y ?? point.Y);
+                if (x !== null && y !== null) {
+                    return { x, y };
+                }
+            }
+
+            return null;
         }
 
         function getFaceConfidence(face) {
@@ -267,14 +312,15 @@
 
             if (face.boundingBox) {
                 const boundingBox = face.boundingBox;
-                if (Array.isArray(boundingBox.topLeft) && Array.isArray(boundingBox.bottomRight)) {
-                    const x1 = getNumericValue(boundingBox.topLeft[0]);
-                    const y1 = getNumericValue(boundingBox.topLeft[1]);
-                    const x2 = getNumericValue(boundingBox.bottomRight[0]);
-                    const y2 = getNumericValue(boundingBox.bottomRight[1]);
-                    if (x1 !== null && y1 !== null && x2 !== null && y2 !== null) {
-                        return normalizeBox({ x: x1, y: y1, width: x2 - x1, height: y2 - y1 });
-                    }
+                const topLeft = getPoint(boundingBox.topLeft);
+                const bottomRight = getPoint(boundingBox.bottomRight);
+                if (topLeft && bottomRight) {
+                    return normalizeBox({
+                        x: topLeft.x,
+                        y: topLeft.y,
+                        width: bottomRight.x - topLeft.x,
+                        height: bottomRight.y - topLeft.y
+                    });
                 }
 
                 const x = getNumericValue(boundingBox.x ?? boundingBox.originX);
@@ -286,14 +332,15 @@
                 }
             }
 
-            if (Array.isArray(face.topLeft) && Array.isArray(face.bottomRight)) {
-                const x1 = getNumericValue(face.topLeft[0]);
-                const y1 = getNumericValue(face.topLeft[1]);
-                const x2 = getNumericValue(face.bottomRight[0]);
-                const y2 = getNumericValue(face.bottomRight[1]);
-                if (x1 !== null && y1 !== null && x2 !== null && y2 !== null) {
-                    return normalizeBox({ x: x1, y: y1, width: x2 - x1, height: y2 - y1 });
-                }
+            const topLeft = getPoint(face.topLeft);
+            const bottomRight = getPoint(face.bottomRight);
+            if (topLeft && bottomRight) {
+                return normalizeBox({
+                    x: topLeft.x,
+                    y: topLeft.y,
+                    width: bottomRight.x - topLeft.x,
+                    height: bottomRight.y - topLeft.y
+                });
             }
 
             return null;
@@ -329,7 +376,9 @@
                     return;
                 }
 
-                const faces = await faceDetector.estimateFaces(video);
+                const faces = await faceDetector.estimateFaces(video, {
+                    flipHorizontal: currentFacingMode === 'user'
+                });
 
                 // Set canvas size to match video display size
                 const rect = video.getBoundingClientRect();
