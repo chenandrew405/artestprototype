@@ -80,6 +80,11 @@
       display: block;
     }
 
+    .stage.mirror video,
+    .stage.mirror #overlay {
+      transform: scaleX(-1);
+    }
+
     #overlay {
       position: absolute;
       inset: 0;
@@ -258,9 +263,7 @@
   </main>
 
   <script type="module">
-    import vision from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14";
-
-    const { FaceDetector, FilesetResolver } = vision;
+    import { FaceDetector, FilesetResolver } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14";
 
     const videoEl = document.getElementById("video");
     const stageEl = document.querySelector(".stage");
@@ -273,7 +276,8 @@
     const stopBtn = document.getElementById("stopBtn");
     const shotGrid = document.getElementById("shotGrid");
     const emptyState = document.getElementById("emptyState");
-    const modelPath = "./blaze_face_short_range.tflite";
+    const localModelPath = new URL("./blaze_face_short_range.tflite", window.location.href).toString();
+    const fallbackModelPath = "https://storage.googleapis.com/mediapipe-models/face_detector/blaze_face_short_range/float16/latest/blaze_face_short_range.tflite";
     const wasmPath = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm";
 
     let stream = null;
@@ -283,9 +287,13 @@
     let animationFrameId = null;
     let lastVideoTime = -1;
     let lastFaceCount = -1;
+    let detectorModelSource = "none";
+    let detectorErrorShown = false;
 
-    const setStatus = (message) => {
+    const setStatus = (message, isError = false) => {
       statusEl.textContent = message;
+      statusEl.style.borderColor = isError ? "rgba(255, 123, 123, 0.75)" : "rgba(255, 255, 255, 0.2)";
+      statusEl.style.color = isError ? "#ffd8d8" : "#d3deed";
     };
 
     const setControls = (running) => {
@@ -293,6 +301,17 @@
       flipBtn.disabled = !running;
       snapBtn.disabled = !running;
       stopBtn.disabled = !running;
+    };
+
+    const describeError = (error) => {
+      if (error instanceof Error && error.message) {
+        return error.message;
+      }
+      return String(error);
+    };
+
+    const updateMirrorMode = () => {
+      stageEl.classList.toggle("mirror", facingMode === "user");
     };
 
     const ensureOverlaySize = () => {
@@ -360,14 +379,47 @@
         return detectorLoadPromise;
       }
 
-      setStatus("Loading MediaPipe detector...");
+      const fetchModelBuffer = async (modelUrl, sourceLabel) => {
+        const response = await fetch(modelUrl, { cache: "no-store" });
+        if (!response.ok) {
+          throw new Error(`${sourceLabel} model request failed (${response.status})`);
+        }
+        const modelBuffer = await response.arrayBuffer();
+        if (modelBuffer.byteLength < 1024) {
+          throw new Error(`${sourceLabel} model file looks invalid`);
+        }
+        detectorModelSource = sourceLabel;
+        return modelBuffer;
+      };
+
+      const loadModelBuffer = async () => {
+        setStatus("Loading local face model...");
+        try {
+          return await fetchModelBuffer(localModelPath, "local");
+        } catch (localError) {
+          const localReason = describeError(localError);
+          console.warn("Local model load failed:", localError);
+          setStatus("Local model failed, trying fallback...");
+          try {
+            return await fetchModelBuffer(fallbackModelPath, "fallback");
+          } catch (fallbackError) {
+            const fallbackReason = describeError(fallbackError);
+            throw new Error(`Local model failed (${localReason}). Fallback failed (${fallbackReason}).`);
+          }
+        }
+      };
+
+      setStatus("Loading MediaPipe runtime...");
       detectorLoadPromise = (async () => {
         const filesetResolver = await FilesetResolver.forVisionTasks(wasmPath);
+        const modelBuffer = new Uint8Array(await loadModelBuffer());
+        setStatus(`Creating detector (${detectorModelSource} model)...`);
         faceDetector = await FaceDetector.createFromOptions(filesetResolver, {
-          baseOptions: { modelAssetPath: modelPath },
+          baseOptions: { modelAssetBuffer: modelBuffer },
           runningMode: "VIDEO",
-          minDetectionConfidence: 0.5
+          minDetectionConfidence: 0.35
         });
+        setStatus(`Detector ready (${detectorModelSource} model).`);
         return faceDetector;
       })();
 
@@ -395,6 +447,7 @@
       }
 
       stopDetectionLoop();
+      detectorErrorShown = false;
 
       const frameStep = () => {
         if (!stream || !faceDetector) {
@@ -404,13 +457,24 @@
         if (videoEl.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) {
           if (videoEl.currentTime !== lastVideoTime) {
             lastVideoTime = videoEl.currentTime;
-            const result = faceDetector.detectForVideo(videoEl, performance.now());
-            const detections = result.detections || [];
-            drawDetections(detections);
+            try {
+              const result = faceDetector.detectForVideo(videoEl, performance.now());
+              const detections = result.detections || [];
+              drawDetections(detections);
+              detectorErrorShown = false;
 
-            if (detections.length !== lastFaceCount) {
-              lastFaceCount = detections.length;
-              setStatus(`Live (${facingMode}) faces: ${detections.length}`);
+              if (detections.length !== lastFaceCount) {
+                lastFaceCount = detections.length;
+                const faceLabel = detections.length === 1 ? "face" : "faces";
+                setStatus(`Live (${facingMode}) ${detections.length} ${faceLabel} | model: ${detectorModelSource}`);
+              }
+            } catch (error) {
+              drawDetections([]);
+              if (!detectorErrorShown) {
+                detectorErrorShown = true;
+                setStatus(`Detection error: ${describeError(error)}`, true);
+                console.error(error);
+              }
             }
           }
         }
@@ -435,21 +499,23 @@
 
     const startCamera = async () => {
       if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-        setStatus("Camera API unavailable in this browser.");
+        setStatus("Camera API unavailable in this browser.", true);
         return;
       }
 
+      setStatus("Preparing face detector...");
       try {
         await ensureFaceDetector();
       } catch (error) {
         setControls(false);
-        setStatus("Failed to load MediaPipe detector.");
+        setStatus(`Failed to load MediaPipe detector: ${describeError(error)}`, true);
         console.error(error);
         return;
       }
 
       stopCurrentStream();
       setStatus("Starting camera...");
+      updateMirrorMode();
 
       try {
         const constraints = {
@@ -464,14 +530,22 @@
         stream = await navigator.mediaDevices.getUserMedia(constraints);
         videoEl.srcObject = stream;
         await videoEl.play();
+
+        const activeTrack = stream.getVideoTracks()[0];
+        const actualFacingMode = activeTrack?.getSettings?.().facingMode;
+        if (actualFacingMode === "user" || actualFacingMode === "environment") {
+          facingMode = actualFacingMode;
+          updateMirrorMode();
+        }
+
         ensureOverlaySize();
         setControls(true);
-        setStatus(`Live (${facingMode}) faces: 0`);
+        setStatus(`Camera ready (${facingMode}). Detecting...`);
         startDetectionLoop();
       } catch (error) {
         stopDetectionLoop();
         setControls(false);
-        setStatus("Camera permission denied or unavailable.");
+        setStatus(`Camera permission denied or unavailable: ${describeError(error)}`, true);
         console.error(error);
       }
     };
@@ -529,6 +603,7 @@
       }
     });
 
+    updateMirrorMode();
     ensureOverlaySize();
   </script>
 </body>
