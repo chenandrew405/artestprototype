@@ -263,8 +263,6 @@
   </main>
 
   <script type="module">
-    import { FaceDetector, FilesetResolver } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14";
-
     const videoEl = document.getElementById("video");
     const stageEl = document.querySelector(".stage");
     const overlayEl = document.getElementById("overlay");
@@ -276,6 +274,7 @@
     const stopBtn = document.getElementById("stopBtn");
     const shotGrid = document.getElementById("shotGrid");
     const emptyState = document.getElementById("emptyState");
+    const tasksVisionUrl = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14";
     const localModelPath = new URL("./blaze_face_short_range.tflite", window.location.href).toString();
     const fallbackModelPath = "https://storage.googleapis.com/mediapipe-models/face_detector/blaze_face_short_range/float16/latest/blaze_face_short_range.tflite";
     const wasmPath = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm";
@@ -284,11 +283,15 @@
     let facingMode = "user";
     let faceDetector = null;
     let detectorLoadPromise = null;
+    let visionApiPromise = null;
+    let cameraStartPromise = null;
     let animationFrameId = null;
     let lastVideoTime = -1;
     let lastFaceCount = -1;
     let detectorModelSource = "none";
     let detectorErrorShown = false;
+    let FaceDetectorClass = null;
+    let FilesetResolverClass = null;
 
     const setStatus = (message, isError = false) => {
       statusEl.textContent = message;
@@ -312,6 +315,33 @@
 
     const updateMirrorMode = () => {
       stageEl.classList.toggle("mirror", facingMode === "user");
+    };
+
+    const ensureVisionApi = async () => {
+      if (FaceDetectorClass && FilesetResolverClass) {
+        return;
+      }
+      if (visionApiPromise) {
+        return visionApiPromise;
+      }
+
+      visionApiPromise = (async () => {
+        setStatus("Loading MediaPipe module...");
+        const visionModule = await import(tasksVisionUrl);
+        const vision = visionModule.default ?? visionModule;
+        FaceDetectorClass = vision.FaceDetector ?? visionModule.FaceDetector ?? null;
+        FilesetResolverClass = vision.FilesetResolver ?? visionModule.FilesetResolver ?? null;
+        if (!FaceDetectorClass || !FilesetResolverClass) {
+          throw new Error("MediaPipe module is missing FaceDetector or FilesetResolver.");
+        }
+      })();
+
+      try {
+        await visionApiPromise;
+      } catch (error) {
+        visionApiPromise = null;
+        throw error;
+      }
     };
 
     const ensureOverlaySize = () => {
@@ -409,12 +439,13 @@
         }
       };
 
+      await ensureVisionApi();
       setStatus("Loading MediaPipe runtime...");
       detectorLoadPromise = (async () => {
-        const filesetResolver = await FilesetResolver.forVisionTasks(wasmPath);
+        const filesetResolver = await FilesetResolverClass.forVisionTasks(wasmPath);
         const modelBuffer = new Uint8Array(await loadModelBuffer());
         setStatus(`Creating detector (${detectorModelSource} model)...`);
-        faceDetector = await FaceDetector.createFromOptions(filesetResolver, {
+        faceDetector = await FaceDetectorClass.createFromOptions(filesetResolver, {
           baseOptions: { modelAssetBuffer: modelBuffer },
           runningMode: "VIDEO",
           minDetectionConfidence: 0.35
@@ -498,55 +529,72 @@
     };
 
     const startCamera = async () => {
-      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-        setStatus("Camera API unavailable in this browser.", true);
-        return;
+      if (cameraStartPromise) {
+        setStatus("Camera start already in progress...");
+        return cameraStartPromise;
       }
 
-      setStatus("Preparing face detector...");
-      try {
-        await ensureFaceDetector();
-      } catch (error) {
+      cameraStartPromise = (async () => {
         setControls(false);
-        setStatus(`Failed to load MediaPipe detector: ${describeError(error)}`, true);
-        console.error(error);
-        return;
-      }
+        startBtn.disabled = true;
 
-      stopCurrentStream();
-      setStatus("Starting camera...");
-      updateMirrorMode();
-
-      try {
-        const constraints = {
-          video: {
-            facingMode: { ideal: facingMode },
-            width: { ideal: 1280 },
-            height: { ideal: 720 }
-          },
-          audio: false
-        };
-
-        stream = await navigator.mediaDevices.getUserMedia(constraints);
-        videoEl.srcObject = stream;
-        await videoEl.play();
-
-        const activeTrack = stream.getVideoTracks()[0];
-        const actualFacingMode = activeTrack?.getSettings?.().facingMode;
-        if (actualFacingMode === "user" || actualFacingMode === "environment") {
-          facingMode = actualFacingMode;
-          updateMirrorMode();
+        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+          setStatus("Camera API unavailable in this browser.", true);
+          setControls(false);
+          return;
         }
 
-        ensureOverlaySize();
-        setControls(true);
-        setStatus(`Camera ready (${facingMode}). Detecting...`);
-        startDetectionLoop();
-      } catch (error) {
-        stopDetectionLoop();
-        setControls(false);
-        setStatus(`Camera permission denied or unavailable: ${describeError(error)}`, true);
-        console.error(error);
+        setStatus("Preparing face detector...");
+        try {
+          await ensureFaceDetector();
+        } catch (error) {
+          setControls(false);
+          setStatus(`Failed to load MediaPipe detector: ${describeError(error)}`, true);
+          console.error(error);
+          return;
+        }
+
+        stopCurrentStream();
+        setStatus("Starting camera...");
+        updateMirrorMode();
+
+        try {
+          const constraints = {
+            video: {
+              facingMode: { ideal: facingMode },
+              width: { ideal: 1280 },
+              height: { ideal: 720 }
+            },
+            audio: false
+          };
+
+          stream = await navigator.mediaDevices.getUserMedia(constraints);
+          videoEl.srcObject = stream;
+          await videoEl.play();
+
+          const activeTrack = stream.getVideoTracks()[0];
+          const actualFacingMode = activeTrack?.getSettings?.().facingMode;
+          if (actualFacingMode === "user" || actualFacingMode === "environment") {
+            facingMode = actualFacingMode;
+            updateMirrorMode();
+          }
+
+          ensureOverlaySize();
+          setControls(true);
+          setStatus(`Camera ready (${facingMode}). Detecting...`);
+          startDetectionLoop();
+        } catch (error) {
+          stopDetectionLoop();
+          setControls(false);
+          setStatus(`Camera permission denied or unavailable: ${describeError(error)}`, true);
+          console.error(error);
+        }
+      })();
+
+      try {
+        await cameraStartPromise;
+      } finally {
+        cameraStartPromise = null;
       }
     };
 
@@ -573,12 +621,12 @@
     };
 
     startBtn.addEventListener("click", () => {
-      startCamera();
+      void startCamera();
     });
 
     flipBtn.addEventListener("click", () => {
       facingMode = facingMode === "user" ? "environment" : "user";
-      startCamera();
+      void startCamera();
     });
 
     snapBtn.addEventListener("click", () => {
