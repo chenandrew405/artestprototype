@@ -45,7 +45,7 @@ Then open `http://localhost:8000` in your browser.
 
 ### Option 2: Python Face Detection with Database (face_detection.py)
 
-Real-time face detection using OpenCV DNN (Res10 SSD) with SQLite database integration.
+Real-time face detection using MediaPipe Face Mesh with SQLite database integration.
 
 **Run:**
 ```bash
@@ -58,14 +58,14 @@ python face_detection.py
 - **s** or **SPACE** - Manually save current detection to database with image
 
 **Features:**
-- Real-time DNN face detection with confidence labels
+- Real-time face mesh landmark detection and bounding boxes
 - Automatic detection logging to SQLite database
 - Saves face coordinates, timestamps, and metadata
 - FPS counter and face count overlay
 - Manual image capture of detections
 - Database viewer to see all detections
 - Total face count tracker
-- Auto-downloads DNN model files on first run (requires internet once)
+- Uses built-in MediaPipe runtime models (no DNN model download step)
 
 **View Database:**
 ```bash
@@ -75,11 +75,10 @@ python view_database.py
 **Configuration:**
 Edit `config.py` to customize:
 - Camera settings (resolution, index)
-- DNN confidence threshold and minimum face size
+- MediaPipe confidence and minimum face size thresholds
 - Auto-save behavior
 - Output directories
 - Database location
-- DNN model paths/URLs
 
 ### Option 3: Python Desktop App (main.py)
 

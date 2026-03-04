@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Face Detection with Database Integration
-Uses OpenCV DNN face detector (Res10 SSD) for real-time face detection
+Uses MediaPipe Face Mesh for real-time face detection and landmarks
 Stores detection events and face data in SQLite database
 """
 
@@ -10,8 +10,7 @@ import sqlite3
 import os
 from datetime import datetime
 import time
-import urllib.request
-import numpy as np
+import mediapipe as mp
 import config
 
 
@@ -83,48 +82,23 @@ class FaceDetector:
     def __init__(self):
         self.db = FaceDetectionDB(config.DATABASE_PATH)
         self.camera = None
-        self.face_net = None
+        self.face_mesh = None
         self.frame_count = 0
         self.fps_start_time = time.time()
         self.fps = 0
 
         self.load_face_detector()
 
-    def download_model_file(self, url, output_path, label):
-        """Download a DNN model file if not present locally"""
-        print(f"Downloading {label}...")
-        urllib.request.urlretrieve(url, output_path)
-        file_size_kb = os.path.getsize(output_path) / 1024
-        print(f"Downloaded {label}: {output_path} ({file_size_kb:.1f} KB)")
-
-    def ensure_dnn_models(self):
-        """Ensure required DNN model files are available"""
-        required_files = [
-            (config.DNN_PROTOTXT_PATH, config.DNN_PROTOTXT_URL, "DNN prototxt"),
-            (config.DNN_MODEL_PATH, config.DNN_MODEL_URL, "DNN model"),
-        ]
-
-        missing_files = [item for item in required_files if not os.path.exists(item[0])]
-
-        if missing_files and not config.AUTO_DOWNLOAD_DNN_MODELS:
-            missing_paths = ", ".join(path for (path, _, _) in missing_files)
-            raise FileNotFoundError(
-                f"Missing DNN model file(s): {missing_paths}. "
-                "Enable AUTO_DOWNLOAD_DNN_MODELS or place files manually in models/."
-            )
-
-        for output_path, url, label in missing_files:
-            self.download_model_file(url, output_path, label)
-
     def load_face_detector(self):
-        """Load OpenCV DNN face detector"""
-        self.ensure_dnn_models()
-        self.face_net = cv2.dnn.readNetFromCaffe(config.DNN_PROTOTXT_PATH, config.DNN_MODEL_PATH)
-
-        if self.face_net.empty():
-            raise Exception("Failed to load OpenCV DNN face detector")
-
-        print("DNN face detection model loaded successfully")
+        """Load MediaPipe Face Mesh detector"""
+        self.face_mesh = mp.solutions.face_mesh.FaceMesh(
+            static_image_mode=False,
+            max_num_faces=config.MP_MAX_NUM_FACES,
+            refine_landmarks=True,
+            min_detection_confidence=config.MP_MIN_DETECTION_CONFIDENCE,
+            min_tracking_confidence=config.MP_MIN_TRACKING_CONFIDENCE,
+        )
+        print("MediaPipe Face Mesh loaded successfully")
 
     def init_camera(self):
         """Initialize camera"""
@@ -140,51 +114,72 @@ class FaceDetector:
         print(f"Camera initialized: {config.CAMERA_WIDTH}x{config.CAMERA_HEIGHT}")
 
     def detect_faces(self, frame):
-        """Detect faces in frame"""
+        """Detect faces in frame and return bounding boxes + landmarks"""
         height, width = frame.shape[:2]
         if height == 0 or width == 0:
             return []
 
-        blob = cv2.dnn.blobFromImage(
-            frame,
-            scalefactor=1.0,
-            size=config.DNN_INPUT_SIZE,
-            mean=config.DNN_MEAN_VALUES,
-            swapRB=False,
-            crop=False
-        )
-        self.face_net.setInput(blob)
-        detections = self.face_net.forward()
+        rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        results = self.face_mesh.process(rgb_frame)
+        if not results.multi_face_landmarks:
+            return []
 
         faces = []
-        for i in range(detections.shape[2]):
-            confidence = float(detections[0, 0, i, 2])
-            if confidence < config.DNN_CONFIDENCE_THRESHOLD:
-                continue
+        for face_landmarks in results.multi_face_landmarks:
+            x_coords = [int(landmark.x * width) for landmark in face_landmarks.landmark]
+            y_coords = [int(landmark.y * height) for landmark in face_landmarks.landmark]
 
-            box = detections[0, 0, i, 3:7] * np.array([width, height, width, height], dtype="float32")
-            x1, y1, x2, y2 = box.astype("int")
-
-            x1 = max(0, min(x1, width - 1))
-            y1 = max(0, min(y1, height - 1))
-            x2 = max(0, min(x2, width))
-            y2 = max(0, min(y2, height))
+            x1 = max(0, min(x_coords))
+            y1 = max(0, min(y_coords))
+            x2 = min(width, max(x_coords))
+            y2 = min(height, max(y_coords))
 
             face_width = x2 - x1
             face_height = y2 - y1
             if face_width <= 0 or face_height <= 0:
                 continue
 
-            if face_width < config.DNN_MIN_FACE_SIZE[0] or face_height < config.DNN_MIN_FACE_SIZE[1]:
+            if face_width < config.MP_MIN_FACE_SIZE[0] or face_height < config.MP_MIN_FACE_SIZE[1]:
                 continue
 
-            faces.append((x1, y1, face_width, face_height, confidence))
+            # MediaPipe Face Mesh does not expose a per-face confidence score.
+            faces.append((x1, y1, face_width, face_height, 1.0, face_landmarks))
 
         return faces
 
+    def draw_face_landmarks(self, frame, face_landmarks):
+        """Draw MediaPipe face mesh overlays"""
+        drawing_utils = mp.solutions.drawing_utils
+        drawing_styles = mp.solutions.drawing_styles
+        face_mesh = mp.solutions.face_mesh
+
+        drawing_utils.draw_landmarks(
+            image=frame,
+            landmark_list=face_landmarks,
+            connections=face_mesh.FACEMESH_TESSELATION,
+            landmark_drawing_spec=None,
+            connection_drawing_spec=drawing_styles.get_default_face_mesh_tesselation_style(),
+        )
+        drawing_utils.draw_landmarks(
+            image=frame,
+            landmark_list=face_landmarks,
+            connections=face_mesh.FACEMESH_CONTOURS,
+            landmark_drawing_spec=None,
+            connection_drawing_spec=drawing_styles.get_default_face_mesh_contours_style(),
+        )
+        drawing_utils.draw_landmarks(
+            image=frame,
+            landmark_list=face_landmarks,
+            connections=face_mesh.FACEMESH_IRISES,
+            landmark_drawing_spec=None,
+            connection_drawing_spec=drawing_styles.get_default_face_mesh_iris_connections_style(),
+        )
+
     def draw_faces(self, frame, faces):
-        """Draw bounding boxes around detected faces"""
-        for (x, y, w, h, confidence) in faces:
+        """Draw landmarks and bounding boxes around detected faces"""
+        for (x, y, w, h, _, face_landmarks) in faces:
+            self.draw_face_landmarks(frame, face_landmarks)
+
             # Draw rectangle
             cv2.rectangle(
                 frame,
@@ -195,7 +190,7 @@ class FaceDetector:
             )
 
             # Draw label
-            label = f"Face {confidence * 100:.0f}%"
+            label = "Face"
             cv2.putText(
                 frame,
                 label,
@@ -256,7 +251,7 @@ class FaceDetector:
         detection_id = self.db.save_detection(len(faces), image_path)
 
         # Save individual face coordinates
-        for (x, y, w, h, confidence) in faces:
+        for (x, y, w, h, confidence, _) in faces:
             self.db.save_face(detection_id, int(x), int(y), int(w), int(h), float(confidence))
 
         print(f"Saved detection: {len(faces)} face(s) - ID: {detection_id}")
@@ -322,6 +317,8 @@ class FaceDetector:
             # Cleanup
             if self.camera:
                 self.camera.release()
+            if self.face_mesh:
+                self.face_mesh.close()
             cv2.destroyAllWindows()
 
             # Show summary
@@ -332,7 +329,7 @@ class FaceDetector:
 
 def main():
     """Main entry point"""
-    print("Face Detection with OpenCV DNN + Database Integration")
+    print("Face Detection with MediaPipe Face Mesh + Database Integration")
     print("=" * 60)
 
     detector = FaceDetector()
