@@ -1,0 +1,363 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AR Camera Prototype</title>
+  <meta name="description" content="Browser camera prototype for quick AR testing on GitHub Pages.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg-0: #05070d;
+      --bg-1: #111f3c;
+      --bg-2: #0a7c83;
+      --text: #f5f7fb;
+      --muted: #9eb1c9;
+      --panel: rgba(7, 12, 22, 0.72);
+      --panel-border: rgba(255, 255, 255, 0.12);
+      --accent: #35dfa4;
+      --accent-2: #ffd166;
+      --danger: #ff7b7b;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: "Space Grotesk", "Segoe UI", Tahoma, sans-serif;
+      color: var(--text);
+      background:
+        radial-gradient(1300px 700px at 85% -20%, rgba(53, 223, 164, 0.2), transparent 70%),
+        radial-gradient(950px 560px at -15% 15%, rgba(255, 209, 102, 0.2), transparent 68%),
+        linear-gradient(145deg, var(--bg-0), var(--bg-1) 46%, var(--bg-2));
+      display: grid;
+      place-items: center;
+      padding: 24px;
+    }
+
+    .app {
+      width: min(1020px, 100%);
+      background: var(--panel);
+      border: 1px solid var(--panel-border);
+      border-radius: 20px;
+      backdrop-filter: blur(10px);
+      box-shadow: 0 24px 60px rgba(0, 0, 0, 0.35);
+      padding: 22px;
+      animation: rise 560ms ease-out both;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: clamp(1.4rem, 2.8vw, 2.2rem);
+      letter-spacing: 0.02em;
+    }
+
+    .sub {
+      margin: 8px 0 18px;
+      color: var(--muted);
+      line-height: 1.4;
+      font-size: 0.96rem;
+    }
+
+    .stage {
+      position: relative;
+      overflow: hidden;
+      border-radius: 16px;
+      border: 1px solid rgba(255, 255, 255, 0.14);
+      background: #02040a;
+      aspect-ratio: 16 / 9;
+    }
+
+    video {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      display: block;
+    }
+
+    .status {
+      position: absolute;
+      top: 10px;
+      left: 10px;
+      background: rgba(0, 0, 0, 0.62);
+      border: 1px solid rgba(255, 255, 255, 0.2);
+      border-radius: 999px;
+      padding: 6px 11px;
+      font-size: 0.82rem;
+      color: #d3deed;
+    }
+
+    .controls {
+      margin-top: 14px;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+    }
+
+    button {
+      border: 0;
+      border-radius: 12px;
+      padding: 10px 14px;
+      font: inherit;
+      font-weight: 600;
+      cursor: pointer;
+      transition: transform 120ms ease, filter 120ms ease, opacity 120ms ease;
+    }
+
+    button:hover {
+      transform: translateY(-1px);
+      filter: brightness(1.08);
+    }
+
+    button:active {
+      transform: translateY(0);
+    }
+
+    button:disabled {
+      cursor: not-allowed;
+      opacity: 0.55;
+      transform: none;
+    }
+
+    .primary {
+      background: var(--accent);
+      color: #062418;
+    }
+
+    .warn {
+      background: var(--accent-2);
+      color: #332300;
+    }
+
+    .ghost {
+      background: rgba(255, 255, 255, 0.14);
+      color: #f8fbff;
+      border: 1px solid rgba(255, 255, 255, 0.22);
+    }
+
+    .danger {
+      background: var(--danger);
+      color: #320606;
+    }
+
+    .shots {
+      margin-top: 18px;
+    }
+
+    .shots h2 {
+      margin: 0 0 10px;
+      font-size: 1rem;
+      color: #e9effa;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+      gap: 10px;
+    }
+
+    .shot {
+      margin: 0;
+      border-radius: 12px;
+      overflow: hidden;
+      border: 1px solid rgba(255, 255, 255, 0.18);
+      background: rgba(0, 0, 0, 0.45);
+      animation: pop 200ms ease-out both;
+    }
+
+    .shot img {
+      display: block;
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      aspect-ratio: 4 / 3;
+    }
+
+    .empty {
+      margin: 0;
+      color: var(--muted);
+      font-size: 0.92rem;
+    }
+
+    @keyframes rise {
+      from {
+        opacity: 0;
+        transform: translateY(8px);
+      }
+      to {
+        opacity: 1;
+        transform: translateY(0);
+      }
+    }
+
+    @keyframes pop {
+      from {
+        opacity: 0;
+        transform: scale(0.98);
+      }
+      to {
+        opacity: 1;
+        transform: scale(1);
+      }
+    }
+
+    @media (max-width: 600px) {
+      body {
+        padding: 12px;
+      }
+
+      .app {
+        padding: 14px;
+        border-radius: 14px;
+      }
+
+      .sub {
+        font-size: 0.9rem;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main class="app">
+    <h1>AR Camera Prototype</h1>
+    <p class="sub">
+      Browser-only camera sandbox for GitHub Pages. Start camera, switch front/back lens, and take snapshots.
+    </p>
+
+    <section class="stage" aria-label="Live camera preview">
+      <video id="video" playsinline autoplay muted></video>
+      <div class="status" id="status">Idle</div>
+    </section>
+
+    <div class="controls">
+      <button id="startBtn" class="primary" type="button">Start Camera</button>
+      <button id="flipBtn" class="warn" type="button" disabled>Switch Camera</button>
+      <button id="snapBtn" class="ghost" type="button" disabled>Take Snapshot</button>
+      <button id="stopBtn" class="danger" type="button" disabled>Stop</button>
+    </div>
+
+    <section class="shots">
+      <h2>Snapshots</h2>
+      <p id="emptyState" class="empty">No snapshots yet.</p>
+      <div id="shotGrid" class="grid"></div>
+    </section>
+  </main>
+
+  <script>
+    const videoEl = document.getElementById("video");
+    const statusEl = document.getElementById("status");
+    const startBtn = document.getElementById("startBtn");
+    const flipBtn = document.getElementById("flipBtn");
+    const snapBtn = document.getElementById("snapBtn");
+    const stopBtn = document.getElementById("stopBtn");
+    const shotGrid = document.getElementById("shotGrid");
+    const emptyState = document.getElementById("emptyState");
+
+    let stream = null;
+    let facingMode = "user";
+
+    const setStatus = (message) => {
+      statusEl.textContent = message;
+    };
+
+    const setControls = (running) => {
+      startBtn.disabled = running;
+      flipBtn.disabled = !running;
+      snapBtn.disabled = !running;
+      stopBtn.disabled = !running;
+    };
+
+    const stopCurrentStream = () => {
+      if (!stream) {
+        return;
+      }
+      for (const track of stream.getTracks()) {
+        track.stop();
+      }
+      stream = null;
+      videoEl.srcObject = null;
+    };
+
+    const startCamera = async () => {
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        setStatus("Camera API unavailable in this browser.");
+        return;
+      }
+
+      stopCurrentStream();
+      setStatus("Starting camera...");
+
+      try {
+        const constraints = {
+          video: {
+            facingMode: { ideal: facingMode },
+            width: { ideal: 1280 },
+            height: { ideal: 720 }
+          },
+          audio: false
+        };
+
+        stream = await navigator.mediaDevices.getUserMedia(constraints);
+        videoEl.srcObject = stream;
+        await videoEl.play();
+        setControls(true);
+        setStatus(`Live (${facingMode})`);
+      } catch (error) {
+        setControls(false);
+        setStatus("Camera permission denied or unavailable.");
+        console.error(error);
+      }
+    };
+
+    const takeSnapshot = () => {
+      if (!stream || videoEl.videoWidth === 0 || videoEl.videoHeight === 0) {
+        return;
+      }
+
+      const canvas = document.createElement("canvas");
+      canvas.width = videoEl.videoWidth;
+      canvas.height = videoEl.videoHeight;
+      const ctx = canvas.getContext("2d");
+      ctx.drawImage(videoEl, 0, 0, canvas.width, canvas.height);
+
+      const img = document.createElement("img");
+      img.src = canvas.toDataURL("image/jpeg", 0.92);
+      img.alt = "Captured camera snapshot";
+
+      const figure = document.createElement("figure");
+      figure.className = "shot";
+      figure.appendChild(img);
+      shotGrid.prepend(figure);
+      emptyState.hidden = true;
+    };
+
+    startBtn.addEventListener("click", () => {
+      startCamera();
+    });
+
+    flipBtn.addEventListener("click", () => {
+      facingMode = facingMode === "user" ? "environment" : "user";
+      startCamera();
+    });
+
+    snapBtn.addEventListener("click", () => {
+      takeSnapshot();
+    });
+
+    stopBtn.addEventListener("click", () => {
+      stopCurrentStream();
+      setControls(false);
+      setStatus("Stopped");
+    });
+
+    window.addEventListener("beforeunload", () => {
+      stopCurrentStream();
+    });
+  </script>
+</body>
+</html>
