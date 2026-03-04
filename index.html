@@ -239,7 +239,7 @@
   <main class="app">
     <h1>AR Camera Prototype</h1>
     <p class="sub">
-      Browser-only camera sandbox for GitHub Pages with MediaPipe face detection, lens switching, and snapshots.
+      Browser-only camera sandbox for GitHub Pages with MediaPipe face landmarks, lens switching, and snapshots.
     </p>
 
     <section class="stage" aria-label="Live camera preview">
@@ -275,13 +275,13 @@
     const shotGrid = document.getElementById("shotGrid");
     const emptyState = document.getElementById("emptyState");
     const tasksVisionUrl = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14";
-    const localModelPath = new URL("./blaze_face_short_range.tflite", window.location.href).toString();
-    const fallbackModelPath = "https://storage.googleapis.com/mediapipe-models/face_detector/blaze_face_short_range/float16/latest/blaze_face_short_range.tflite";
+    const localModelPath = new URL("./face_landmarker.task", window.location.href).toString();
+    const fallbackModelPath = "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/latest/face_landmarker.task";
     const wasmPath = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm";
 
     let stream = null;
     let facingMode = "user";
-    let faceDetector = null;
+    let faceLandmarker = null;
     let detectorLoadPromise = null;
     let visionApiPromise = null;
     let cameraStartPromise = null;
@@ -290,7 +290,7 @@
     let lastFaceCount = -1;
     let detectorModelSource = "none";
     let detectorErrorShown = false;
-    let FaceDetectorClass = null;
+    let FaceLandmarkerClass = null;
     let FilesetResolverClass = null;
 
     const setStatus = (message, isError = false) => {
@@ -318,7 +318,7 @@
     };
 
     const ensureVisionApi = async () => {
-      if (FaceDetectorClass && FilesetResolverClass) {
+      if (FaceLandmarkerClass && FilesetResolverClass) {
         return;
       }
       if (visionApiPromise) {
@@ -329,10 +329,10 @@
         setStatus("Loading MediaPipe module...");
         const visionModule = await import(tasksVisionUrl);
         const vision = visionModule.default ?? visionModule;
-        FaceDetectorClass = vision.FaceDetector ?? visionModule.FaceDetector ?? null;
+        FaceLandmarkerClass = vision.FaceLandmarker ?? visionModule.FaceLandmarker ?? null;
         FilesetResolverClass = vision.FilesetResolver ?? visionModule.FilesetResolver ?? null;
-        if (!FaceDetectorClass || !FilesetResolverClass) {
-          throw new Error("MediaPipe module is missing FaceDetector or FilesetResolver.");
+        if (!FaceLandmarkerClass || !FilesetResolverClass) {
+          throw new Error("MediaPipe module is missing FaceLandmarker or FilesetResolver.");
         }
       })();
 
@@ -365,11 +365,11 @@
       overlayCtx.clearRect(0, 0, width, height);
     };
 
-    const drawDetections = (detections) => {
+    const drawLandmarks = (faceLandmarks) => {
       const { width: displayWidth, height: displayHeight } = ensureOverlaySize();
       overlayCtx.clearRect(0, 0, displayWidth, displayHeight);
 
-      if (!detections.length || videoEl.videoWidth === 0 || videoEl.videoHeight === 0) {
+      if (!faceLandmarks.length || videoEl.videoWidth === 0 || videoEl.videoHeight === 0) {
         return;
       }
 
@@ -381,29 +381,27 @@
       const offsetX = (displayWidth - renderedWidth) / 2;
       const offsetY = (displayHeight - renderedHeight) / 2;
 
-      overlayCtx.strokeStyle = "rgba(53, 223, 164, 0.95)";
-      overlayCtx.lineWidth = 2;
+      overlayCtx.fillStyle = "rgba(53, 223, 164, 0.9)";
       overlayCtx.shadowColor = "rgba(53, 223, 164, 0.55)";
-      overlayCtx.shadowBlur = 10;
+      overlayCtx.shadowBlur = 4;
+      const pointRadius = Math.max(1.2, Math.min(2.2, displayWidth / 430));
 
-      for (const detection of detections) {
-        const bbox = detection.boundingBox;
-        if (!bbox) {
-          continue;
+      for (const face of faceLandmarks) {
+        for (const landmark of face) {
+          const x = landmark.x * renderedWidth + offsetX;
+          const y = landmark.y * renderedHeight + offsetY;
+          overlayCtx.beginPath();
+          overlayCtx.arc(x, y, pointRadius, 0, Math.PI * 2);
+          overlayCtx.fill();
         }
-        const x = bbox.originX * scale + offsetX;
-        const y = bbox.originY * scale + offsetY;
-        const w = bbox.width * scale;
-        const h = bbox.height * scale;
-        overlayCtx.strokeRect(x, y, w, h);
       }
 
       overlayCtx.shadowBlur = 0;
     };
 
-    const ensureFaceDetector = async () => {
-      if (faceDetector) {
-        return faceDetector;
+    const ensureFaceLandmarker = async () => {
+      if (faceLandmarker) {
+        return faceLandmarker;
       }
       if (detectorLoadPromise) {
         return detectorLoadPromise;
@@ -423,13 +421,13 @@
       };
 
       const loadModelBuffer = async () => {
-        setStatus("Loading local face model...");
+        setStatus("Loading local face landmark model...");
         try {
           return await fetchModelBuffer(localModelPath, "local");
         } catch (localError) {
           const localReason = describeError(localError);
           console.warn("Local model load failed:", localError);
-          setStatus("Local model failed, trying fallback...");
+          setStatus("Local model failed, trying official model...");
           try {
             return await fetchModelBuffer(fallbackModelPath, "fallback");
           } catch (fallbackError) {
@@ -444,14 +442,17 @@
       detectorLoadPromise = (async () => {
         const filesetResolver = await FilesetResolverClass.forVisionTasks(wasmPath);
         const modelBuffer = new Uint8Array(await loadModelBuffer());
-        setStatus(`Creating detector (${detectorModelSource} model)...`);
-        faceDetector = await FaceDetectorClass.createFromOptions(filesetResolver, {
+        setStatus(`Creating landmarker (${detectorModelSource} model)...`);
+        faceLandmarker = await FaceLandmarkerClass.createFromOptions(filesetResolver, {
           baseOptions: { modelAssetBuffer: modelBuffer },
           runningMode: "VIDEO",
-          minDetectionConfidence: 0.35
+          numFaces: 1,
+          minFaceDetectionConfidence: 0.5,
+          minFacePresenceConfidence: 0.5,
+          minTrackingConfidence: 0.5
         });
-        setStatus(`Detector ready (${detectorModelSource} model).`);
-        return faceDetector;
+        setStatus(`Landmarker ready (${detectorModelSource} model).`);
+        return faceLandmarker;
       })();
 
       try {
@@ -473,7 +474,7 @@
     };
 
     const startDetectionLoop = () => {
-      if (!stream || !faceDetector) {
+      if (!stream || !faceLandmarker) {
         return;
       }
 
@@ -481,7 +482,7 @@
       detectorErrorShown = false;
 
       const frameStep = () => {
-        if (!stream || !faceDetector) {
+        if (!stream || !faceLandmarker) {
           return;
         }
 
@@ -489,21 +490,21 @@
           if (videoEl.currentTime !== lastVideoTime) {
             lastVideoTime = videoEl.currentTime;
             try {
-              const result = faceDetector.detectForVideo(videoEl, performance.now());
-              const detections = result.detections || [];
-              drawDetections(detections);
+              const result = faceLandmarker.detectForVideo(videoEl, performance.now());
+              const landmarks = result.faceLandmarks || [];
+              drawLandmarks(landmarks);
               detectorErrorShown = false;
 
-              if (detections.length !== lastFaceCount) {
-                lastFaceCount = detections.length;
-                const faceLabel = detections.length === 1 ? "face" : "faces";
-                setStatus(`Live (${facingMode}) ${detections.length} ${faceLabel} | model: ${detectorModelSource}`);
+              if (landmarks.length !== lastFaceCount) {
+                lastFaceCount = landmarks.length;
+                const faceLabel = landmarks.length === 1 ? "face" : "faces";
+                setStatus(`Live (${facingMode}) ${landmarks.length} ${faceLabel} | landmarks on | model: ${detectorModelSource}`);
               }
             } catch (error) {
-              drawDetections([]);
+              drawLandmarks([]);
               if (!detectorErrorShown) {
                 detectorErrorShown = true;
-                setStatus(`Detection error: ${describeError(error)}`, true);
+                setStatus(`Landmark error: ${describeError(error)}`, true);
                 console.error(error);
               }
             }
@@ -544,12 +545,12 @@
           return;
         }
 
-        setStatus("Preparing face detector...");
+        setStatus("Preparing face landmarks...");
         try {
-          await ensureFaceDetector();
+          await ensureFaceLandmarker();
         } catch (error) {
           setControls(false);
-          setStatus(`Failed to load MediaPipe detector: ${describeError(error)}`, true);
+          setStatus(`Failed to load MediaPipe landmarker: ${describeError(error)}`, true);
           console.error(error);
           return;
         }
@@ -581,7 +582,7 @@
 
           ensureOverlaySize();
           setControls(true);
-          setStatus(`Camera ready (${facingMode}). Detecting...`);
+          setStatus(`Camera ready (${facingMode}). Tracking landmarks...`);
           startDetectionLoop();
         } catch (error) {
           stopDetectionLoop();
