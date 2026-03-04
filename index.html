@@ -80,6 +80,14 @@
       display: block;
     }
 
+    #overlay {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      pointer-events: none;
+    }
+
     .status {
       position: absolute;
       top: 10px;
@@ -226,11 +234,12 @@
   <main class="app">
     <h1>AR Camera Prototype</h1>
     <p class="sub">
-      Browser-only camera sandbox for GitHub Pages. Start camera, switch front/back lens, and take snapshots.
+      Browser-only camera sandbox for GitHub Pages with MediaPipe face detection, lens switching, and snapshots.
     </p>
 
     <section class="stage" aria-label="Live camera preview">
       <video id="video" playsinline autoplay muted></video>
+      <canvas id="overlay" aria-hidden="true"></canvas>
       <div class="status" id="status">Idle</div>
     </section>
 
@@ -248,8 +257,15 @@
     </section>
   </main>
 
-  <script>
+  <script type="module">
+    import vision from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14";
+
+    const { FaceDetector, FilesetResolver } = vision;
+
     const videoEl = document.getElementById("video");
+    const stageEl = document.querySelector(".stage");
+    const overlayEl = document.getElementById("overlay");
+    const overlayCtx = overlayEl.getContext("2d");
     const statusEl = document.getElementById("status");
     const startBtn = document.getElementById("startBtn");
     const flipBtn = document.getElementById("flipBtn");
@@ -257,9 +273,16 @@
     const stopBtn = document.getElementById("stopBtn");
     const shotGrid = document.getElementById("shotGrid");
     const emptyState = document.getElementById("emptyState");
+    const modelPath = "./blaze_face_short_range.tflite";
+    const wasmPath = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm";
 
     let stream = null;
     let facingMode = "user";
+    let faceDetector = null;
+    let detectorLoadPromise = null;
+    let animationFrameId = null;
+    let lastVideoTime = -1;
+    let lastFaceCount = -1;
 
     const setStatus = (message) => {
       statusEl.textContent = message;
@@ -272,7 +295,134 @@
       stopBtn.disabled = !running;
     };
 
+    const ensureOverlaySize = () => {
+      const dpr = window.devicePixelRatio || 1;
+      const width = Math.max(1, Math.round(stageEl.clientWidth));
+      const height = Math.max(1, Math.round(stageEl.clientHeight));
+      const desiredWidth = Math.max(1, Math.round(width * dpr));
+      const desiredHeight = Math.max(1, Math.round(height * dpr));
+
+      if (overlayEl.width !== desiredWidth || overlayEl.height !== desiredHeight) {
+        overlayEl.width = desiredWidth;
+        overlayEl.height = desiredHeight;
+      }
+
+      overlayCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      return { width, height };
+    };
+
+    const clearOverlay = () => {
+      const { width, height } = ensureOverlaySize();
+      overlayCtx.clearRect(0, 0, width, height);
+    };
+
+    const drawDetections = (detections) => {
+      const { width: displayWidth, height: displayHeight } = ensureOverlaySize();
+      overlayCtx.clearRect(0, 0, displayWidth, displayHeight);
+
+      if (!detections.length || videoEl.videoWidth === 0 || videoEl.videoHeight === 0) {
+        return;
+      }
+
+      const videoWidth = videoEl.videoWidth;
+      const videoHeight = videoEl.videoHeight;
+      const scale = Math.max(displayWidth / videoWidth, displayHeight / videoHeight);
+      const renderedWidth = videoWidth * scale;
+      const renderedHeight = videoHeight * scale;
+      const offsetX = (displayWidth - renderedWidth) / 2;
+      const offsetY = (displayHeight - renderedHeight) / 2;
+
+      overlayCtx.strokeStyle = "rgba(53, 223, 164, 0.95)";
+      overlayCtx.lineWidth = 2;
+      overlayCtx.shadowColor = "rgba(53, 223, 164, 0.55)";
+      overlayCtx.shadowBlur = 10;
+
+      for (const detection of detections) {
+        const bbox = detection.boundingBox;
+        if (!bbox) {
+          continue;
+        }
+        const x = bbox.originX * scale + offsetX;
+        const y = bbox.originY * scale + offsetY;
+        const w = bbox.width * scale;
+        const h = bbox.height * scale;
+        overlayCtx.strokeRect(x, y, w, h);
+      }
+
+      overlayCtx.shadowBlur = 0;
+    };
+
+    const ensureFaceDetector = async () => {
+      if (faceDetector) {
+        return faceDetector;
+      }
+      if (detectorLoadPromise) {
+        return detectorLoadPromise;
+      }
+
+      setStatus("Loading MediaPipe detector...");
+      detectorLoadPromise = (async () => {
+        const filesetResolver = await FilesetResolver.forVisionTasks(wasmPath);
+        faceDetector = await FaceDetector.createFromOptions(filesetResolver, {
+          baseOptions: { modelAssetPath: modelPath },
+          runningMode: "VIDEO",
+          minDetectionConfidence: 0.5
+        });
+        return faceDetector;
+      })();
+
+      try {
+        return await detectorLoadPromise;
+      } catch (error) {
+        detectorLoadPromise = null;
+        throw error;
+      }
+    };
+
+    const stopDetectionLoop = () => {
+      if (animationFrameId !== null) {
+        cancelAnimationFrame(animationFrameId);
+        animationFrameId = null;
+      }
+      lastVideoTime = -1;
+      lastFaceCount = -1;
+      clearOverlay();
+    };
+
+    const startDetectionLoop = () => {
+      if (!stream || !faceDetector) {
+        return;
+      }
+
+      stopDetectionLoop();
+
+      const frameStep = () => {
+        if (!stream || !faceDetector) {
+          return;
+        }
+
+        if (videoEl.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) {
+          if (videoEl.currentTime !== lastVideoTime) {
+            lastVideoTime = videoEl.currentTime;
+            const result = faceDetector.detectForVideo(videoEl, performance.now());
+            const detections = result.detections || [];
+            drawDetections(detections);
+
+            if (detections.length !== lastFaceCount) {
+              lastFaceCount = detections.length;
+              setStatus(`Live (${facingMode}) faces: ${detections.length}`);
+            }
+          }
+        }
+
+        animationFrameId = requestAnimationFrame(frameStep);
+      };
+
+      animationFrameId = requestAnimationFrame(frameStep);
+    };
+
     const stopCurrentStream = () => {
+      stopDetectionLoop();
       if (!stream) {
         return;
       }
@@ -286,6 +436,15 @@
     const startCamera = async () => {
       if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
         setStatus("Camera API unavailable in this browser.");
+        return;
+      }
+
+      try {
+        await ensureFaceDetector();
+      } catch (error) {
+        setControls(false);
+        setStatus("Failed to load MediaPipe detector.");
+        console.error(error);
         return;
       }
 
@@ -305,9 +464,12 @@
         stream = await navigator.mediaDevices.getUserMedia(constraints);
         videoEl.srcObject = stream;
         await videoEl.play();
+        ensureOverlaySize();
         setControls(true);
-        setStatus(`Live (${facingMode})`);
+        setStatus(`Live (${facingMode}) faces: 0`);
+        startDetectionLoop();
       } catch (error) {
+        stopDetectionLoop();
         setControls(false);
         setStatus("Camera permission denied or unavailable.");
         console.error(error);
@@ -358,6 +520,16 @@
     window.addEventListener("beforeunload", () => {
       stopCurrentStream();
     });
+
+    window.addEventListener("resize", () => {
+      if (stream) {
+        clearOverlay();
+      } else {
+        ensureOverlaySize();
+      }
+    });
+
+    ensureOverlaySize();
   </script>
 </body>
 </html>
