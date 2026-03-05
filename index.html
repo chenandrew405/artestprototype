@@ -112,6 +112,28 @@
       gap: 10px;
     }
 
+    .toggle {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 11px;
+      border-radius: 12px;
+      border: 1px solid rgba(255, 255, 255, 0.22);
+      background: rgba(255, 255, 255, 0.08);
+      color: #e6eef8;
+      font-size: 0.92rem;
+      font-weight: 500;
+      user-select: none;
+    }
+
+    .toggle input {
+      width: 16px;
+      height: 16px;
+      margin: 0;
+      accent-color: var(--accent);
+      cursor: pointer;
+    }
+
     button {
       border: 0;
       border-radius: 12px;
@@ -253,6 +275,10 @@
       <button id="flipBtn" class="warn" type="button" disabled>Switch Camera</button>
       <button id="snapBtn" class="ghost" type="button" disabled>Take Snapshot</button>
       <button id="stopBtn" class="danger" type="button" disabled>Stop</button>
+      <label class="toggle" for="snapshotLandmarksToggle">
+        <input id="snapshotLandmarksToggle" type="checkbox">
+        Save landmarks in snapshot
+      </label>
     </div>
 
     <section class="shots">
@@ -272,6 +298,7 @@
     const flipBtn = document.getElementById("flipBtn");
     const snapBtn = document.getElementById("snapBtn");
     const stopBtn = document.getElementById("stopBtn");
+    const snapshotLandmarksToggle = document.getElementById("snapshotLandmarksToggle");
     const shotGrid = document.getElementById("shotGrid");
     const emptyState = document.getElementById("emptyState");
     const tasksVisionUrl = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14";
@@ -288,6 +315,7 @@
     let animationFrameId = null;
     let lastVideoTime = -1;
     let lastFaceCount = -1;
+    let latestFaceLandmarks = [];
     let detectorModelSource = "none";
     let detectorErrorShown = false;
     let FaceLandmarkerClass = null;
@@ -470,7 +498,31 @@
       }
       lastVideoTime = -1;
       lastFaceCount = -1;
+      latestFaceLandmarks = [];
       clearOverlay();
+    };
+
+    const drawLandmarksOnSnapshot = (ctx, frameWidth, frameHeight, faceLandmarks) => {
+      if (!faceLandmarks.length) {
+        return;
+      }
+
+      const pointRadius = Math.max(1.4, Math.min(3, frameWidth / 360));
+      ctx.fillStyle = "rgba(53, 223, 164, 0.95)";
+      ctx.shadowColor = "rgba(53, 223, 164, 0.55)";
+      ctx.shadowBlur = Math.max(2, frameWidth / 420);
+
+      for (const face of faceLandmarks) {
+        for (const landmark of face) {
+          const x = landmark.x * frameWidth;
+          const y = landmark.y * frameHeight;
+          ctx.beginPath();
+          ctx.arc(x, y, pointRadius, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      }
+
+      ctx.shadowBlur = 0;
     };
 
     const startDetectionLoop = () => {
@@ -492,6 +544,7 @@
             try {
               const result = faceLandmarker.detectForVideo(videoEl, performance.now());
               const landmarks = result.faceLandmarks || [];
+              latestFaceLandmarks = landmarks;
               drawLandmarks(landmarks);
               detectorErrorShown = false;
 
@@ -501,6 +554,7 @@
                 setStatus(`Live (${facingMode}) ${landmarks.length} ${faceLabel} | landmarks on | model: ${detectorModelSource}`);
               }
             } catch (error) {
+              latestFaceLandmarks = [];
               drawLandmarks([]);
               if (!detectorErrorShown) {
                 detectorErrorShown = true;
@@ -609,6 +663,9 @@
       canvas.height = videoEl.videoHeight;
       const ctx = canvas.getContext("2d");
       ctx.drawImage(videoEl, 0, 0, canvas.width, canvas.height);
+      if (snapshotLandmarksToggle.checked) {
+        drawLandmarksOnSnapshot(ctx, canvas.width, canvas.height, latestFaceLandmarks);
+      }
 
       const img = document.createElement("img");
       img.src = canvas.toDataURL("image/jpeg", 0.92);
